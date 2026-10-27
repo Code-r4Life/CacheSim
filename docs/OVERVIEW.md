@@ -62,5 +62,6 @@ Working now: the build on Linux, `ccsim --help` and `ccsim --version`. Everythin
 |---|---|
 | [TECHNICAL_DESIGN.md](TECHNICAL_DESIGN.md) | Exact rules, interfaces, OS details |
 | [WORKING_DEMO.md](WORKING_DEMO.md) | Step-by-step examples with expected results |
+| [FRONTEND_DESIGN.md](FRONTEND_DESIGN.md) | The web UI and how it connects to the backend |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | Build and test on your OS |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | Team roles and workflow |

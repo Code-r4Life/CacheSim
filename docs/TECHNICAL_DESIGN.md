@@ -436,7 +436,47 @@ Role 6 publishes the full schema and sample files in M1-08. Fixed rules:
 
 Both examples are abbreviated. The simulation values are Demo B's expected results; the monitoring values are illustrative.
 
-## 12. Portability rules
+## 12. Visualization architecture
+
+**Planned.** The static results viewer (section 2, `web/`) renders the aggregate JSON of a finished run. The **interactive cache debugger** is a second, optional frontend mode (Role 5) that steps through a trace one access at a time and shows what the cache does at each step. Both are offline, no-network consumers; neither ships before the engine and schema they depend on.
+
+### 12.1 One simulator, not two
+
+The frontend never decides a hit, picks a victim, or decomposes an address. The simulation engine (Role 2) is the single source of truth: as it replays the trace it emits an ordered stream of **structured events** that fully describe each access, and the debugger only renders them. This keeps design rule 3 of section 2 — every capability is a library call first — and guarantees that the picture on screen is exactly the engine's behaviour, not a lookalike reimplemented in JavaScript that can drift from it. The acceptance criterion in [WORKING_DEMO.md section 4](WORKING_DEMO.md#4-interactive-cache-debugger-demo) is literally this equality.
+
+### 12.2 Visualization surfaces
+
+All four are driven from the event stream (12.3); none holds cache logic of its own:
+
+- **Set/way grid** — one row per set, one cell per way, for L1 and (when configured) L2. Each cell shows its line's state (invalid, valid-clean, valid-dirty) plus transient highlights for the line just filled, the line just hit, and the line just evicted. The cell's tag and the access that installed it are shown on hover.
+- **Address inspector** — splits the current access address into tag, set index, and block offset using the bit widths from [section 4](#4-address-mapping), and highlights the set the index selects in the grid. Because the widths come from the configuration, the split is correct for any `size`/`line`/`ways`, including non-power-of-two capacities (section 3).
+- **Hierarchy path** — the L1 → L2 → RAM path for the current access, lighting only the levels actually consulted: an L1 hit stops at L1; an L1 miss that hits L2 lights L1 then L2; an L2 miss lights the whole path to memory. A dirty write-back is drawn as a separate arrow downward, consistent with the order of operations in [section 5.2](#52-l1l2-hierarchy).
+- **Decision panel** — the per-access outcome in words: hit or miss at each level, which way was chosen (invalid-first, else the policy's victim), whether an eviction and write-back occurred, and the policy's reason for the victim (LRU: the least-recently-used way; FIFO: the earliest inserted; Random: the drawn index). This mirrors the "What to notice" narration in [WORKING_DEMO.md Demo B](WORKING_DEMO.md#demo-b-two-level-walkthrough).
+
+### 12.3 Engine event stream
+
+Emission is opt-in (planned `ccsim simulate --emit-events <file>`), so the default batch path and its throughput are unchanged. The stream is newline-delimited JSON — one event per line, in access order, echoing the one-access-per-line trace format (section 7) — and is as deterministic as the run that produced it: the same trace, configuration, and seed give byte-identical events on every OS. The schema id is `ccsim.events/1`, versioned like the results schema (section 11), and consumers ignore unknown fields.
+
+Each access produces one `access` event carrying the full decision for every level it touched; the structural consequences (fill, eviction, write-back) are fields on that event rather than separate records, so a renderer can advance the whole picture from a single line. Sketch (abbreviated; the `levels` array is wrapped here for readability but is one line in the file). The values are step 4 of [Demo B](WORKING_DEMO.md#demo-b-two-level-walkthrough), with `seq` 0-based:
+
+```json
+{"schema":"ccsim.events/1","seq":3,"op":"R","address":"0x080",
+ "decompose":{"L1":{"tag":4,"set":0,"offset":0},"L2":{"tag":2,"set":0,"offset":0}},
+ "levels":[
+   {"name":"L1","result":"miss","way":0,
+    "victim":{"way":0,"tag":0,"dirty":true,"reason":"lru"},"writeback":{"to":"L2"}},
+   {"name":"L2","result":"miss","way":1,
+    "victim":{"way":1,"tag":1,"dirty":false,"reason":"lru"},"fill":{"from":"memory"}}],
+ "latency_cycles":111}
+```
+
+`decompose` feeds the address inspector; `way` and `victim.way` index the exact grid cells to repaint; `result` and `reason` let the decision panel narrate without any policy logic of its own. An L1 hit carries a single `levels` entry with `result":"hit"` and no `victim` or `fill`. Role 2 owns this schema; because it is a cross-module contract it is added through the protocol in [CONTRIBUTING.md section 2](../CONTRIBUTING.md#2-shared-interfaces-and-ownership-boundaries), and whether it ships in v1 is an open decision (section 14).
+
+### 12.4 Playback controls
+
+The debugger holds the event list and a cursor; it does not re-run the engine to move within a loaded stream. **Step** advances the cursor by one event and applies that event's grid updates. **Play** auto-advances at a fixed interval; **Pause** stops. **Replay** resets the cursor and every cell to the initial empty state and plays from `seq` 0. Stepping *backward* is implemented as replay-from-start up to the target `seq`, because cache state is not reversible in general — an eviction discards what the line held. Loading a different trace or changing the configuration or policy re-runs the engine to produce a fresh stream, which is how the debugger compares replacement policies side by side.
+
+## 13. Portability rules
 
 - ISO C++17 without compiler extensions (`CMAKE_CXX_EXTENSIONS OFF`). Code builds warning-free with `/W4 /permissive-` (MSVC) and `-Wall -Wextra -Wpedantic -Wshadow -Wconversion` (GCC, Clang).
 - Use `std::uint64_t` for addresses and counters, never `long` (32-bit on Windows).
@@ -446,7 +486,7 @@ Both examples are abbreviated. The simulation values are Demo B's expected resul
 - Golden results compare integers exactly and floating-point values with a relative tolerance of 1e-9.
 - Checks that must run in Release builds never use `assert()`, which `NDEBUG` removes.
 
-## 13. Open decisions
+## 14. Open decisions
 
 | Decision | Owner | Due |
 |---|---|---|
@@ -454,10 +494,11 @@ Both examples are abbreviated. The simulation values are Demo B's expected resul
 | UTF-8 path strategy on Windows | Role 6 | M1 |
 | Different L1 and L2 line sizes | Role 2 | Post-v1 |
 | Localhost server for the viewer (`ccsim serve`) | Role 1 | Post-v1; not in v1 |
+| Event stream schema (`ccsim.events/1`) and the interactive cache debugger in v1 (section 12) | Role 1 with Roles 2, 5 | Post-v1 unless pulled into scope |
 | Lackey and Dinero trace importers | Role 6 | Post-v1 |
 | Project license | Role 1 | Before the repository is made public |
 
-## 14. References
+## 15. References
 
 - `perf_event_open(2)`: <https://man7.org/linux/man-pages/man2/perf_event_open.2.html>
 - Perf events and tool security (`perf_event_paranoid`, `CAP_PERFMON`): <https://www.kernel.org/doc/html/latest/admin-guide/perf-security.html>

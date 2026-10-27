@@ -188,7 +188,21 @@ Expected v1 coverage per OS (all Not tested):
 - **macOS**: in Instruments.app choose CPU Counters, select events (for example L1D load misses), save via File > Save as Template, then run `xcrun xctrace record --template '<template name>' --launch -- ./your-workload` and open the trace in Instruments or export it with `xcrun xctrace export`.
 - **Windows** (elevated): list sources with `wpr -pmcsources`, record with a WPR profile containing a `<HardwareCounter>` element, and inspect the trace in Windows Performance Analyzer.
 
-## 4. Limitations
+## 4. Interactive cache debugger demo (Planned)
+
+The debugger is the step-through frontend described in [TECHNICAL_DESIGN.md section 12](TECHNICAL_DESIGN.md#12-visualization-architecture). It runs offline and renders the engine's event stream; it never simulates the cache itself. The walkthrough below uses [Demo B](#demo-b-two-level-walkthrough) because every step there is already derived by hand.
+
+The user's workflow:
+
+1. **Load a trace and configure the hierarchy.** Open `demo_b_two_level.trace` and set L1 to 64 bytes, 2-way, 16-byte lines, LRU and L2 to 128 bytes, 2-way, LRU — the same configuration as Demo B. The engine replays the trace and emits the event stream; the debugger loads it and shows the empty set/way grids for L1 (2 sets) and L2 (4 sets).
+2. **Execute one access at a time.** *Step* advances to the next event. At step 4 (`R 0x080`) the address inspector splits the address into L1 `tag 4, set 0, offset 0` and L2 `tag 2, set 0, offset 0`, and highlights set 0 in each grid.
+3. **Inspect the decomposition and cache state.** The grid shows set 0 of L1 holding lines 0 and 4 before the access; the decision panel reads the fields of that one event, not a second simulation.
+4. **Observe hits, misses, and evictions.** Step 4 shows an L1 miss, the dirty line 0 written back into L2 (a separate downward arrow), line 0 evicted from L1, and — because the write-back refreshed line 0's LRU position in L2 — line 4 chosen as the L2 victim instead. The hierarchy path lights L1 → L2 → RAM. These are exactly the points called out under Demo B.
+5. **Play, replay, and compare policies.** *Play* auto-advances to the end; *Replay* clears the grids and runs from the start. Switching the L1 policy to FIFO or Random re-runs the engine and loads a new stream, so the two runs can be stepped side by side — the same comparison Demo C makes numerically for [replacement policies](#demo-c-replacement-policies-and-beladys-anomaly).
+
+**Acceptance.** The debugger is correct only when its visible state equals the simulation engine's results for the same trace and configuration: at every step the grid contents, the inspector's tag/set/offset, and the hit/miss/eviction/write-back shown must match the engine event that produced them, and the final grid and counters must match the aggregate result (the numbers in section 2). Any disagreement is a bug in the frontend, never a second opinion about the cache. This is recorded as **AC-11** in section 6.
+
+## 5. Limitations
 
 Simulation (v1 model):
 
@@ -205,7 +219,7 @@ Monitoring:
 - Windows and macOS cache counters are not automated in v1 (manual cross-checks above).
 - Hardware numbers are not comparable one-to-one with simulator numbers.
 
-## 5. Acceptance criteria
+## 6. Acceptance criteria
 
 The v1 demo is accepted when every criterion has recorded evidence (CI run or linked log):
 
@@ -219,3 +233,4 @@ The v1 demo is accepted when every criterion has recorded evidence (CI run or li
 8. **AC-8** On each OS where hardware access exists, a probe and a monitored run are recorded and the README matrix is updated from that evidence; elsewhere the reasons shown match TECHNICAL_DESIGN.md section 8.
 9. **AC-9** JSON output carries `"schema"` version 1 and loads in the offline viewer without network access.
 10. **AC-10** Documentation status labels match reality: nothing is marked Implemented or Verified without merged tests or recorded evidence.
+11. **AC-11** The interactive cache debugger (section 4) renders only the engine's event stream: for the golden traces, its per-step grid state, address decomposition, and hit/miss/eviction/write-back display match the corresponding engine events, and its final grid and counters match the section 2 results. It performs no cache simulation of its own.

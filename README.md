@@ -120,6 +120,7 @@ Hardware counters were not validated anywhere yet: the validation VM exposes no 
 | [docs/TECHNICAL_DESIGN.md](docs/TECHNICAL_DESIGN.md) | Architecture, cache model, L1/L2 semantics, policies, AMAT, monitoring per OS, interfaces |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Per-OS prerequisites, build, test, debug, troubleshooting |
 | [docs/WORKING_DEMO.md](docs/WORKING_DEMO.md) | Walkthroughs, sample traces, expected results, acceptance criteria |
+| [docs/FRONTEND_DESIGN.md](docs/FRONTEND_DESIGN.md) | Web UI views, visualization layout, and the frontend-to-backend API |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Roles, milestones, issues, Git workflow, reviews, testing, Definition of Done |
 
 ## License
