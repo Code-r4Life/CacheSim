@@ -1,0 +1,47 @@
+# Build trees (always build out of source: cmake -S . -B build)
+/build/
+/build-*/
+/out/
+/cmake-build-*/
+CMakeUserPresets.json
+
+# CMake artifacts from accidental in-source configures
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+compile_commands.json
+
+# Compiled objects and binaries
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+*.pdb
+*.ilk
+
+# Editors, IDEs, tool caches
+.vs/
+.vscode/
+.idea/
+.cache/
+*.swp
+*~
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Profiler and monitoring outputs
+perf.data*
+*.etl
+# Instruments bundles are directories named *.trace; ccsim trace FILES stay tracked.
+*.trace/
+
+# Local run outputs (commit only small, reviewed fixtures under tests/data/)
+/results/
