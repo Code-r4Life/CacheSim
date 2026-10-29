@@ -45,3 +45,11 @@ perf.data*
 
 # Local run outputs (commit only small, reviewed fixtures under tests/data/)
 /results/
+
+# Test evidence: commit only the curated reports listed in tests/results/README.md
+/tests/results/*
+!/tests/results/README.md
+!/tests/results/standard_dataset_report.md
+!/tests/results/standard_dataset_ways.csv
+!/tests/results/standard_dataset_default_run.json
+!/tests/results/benchmark_report.md
