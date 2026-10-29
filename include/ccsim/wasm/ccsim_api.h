@@ -1,7 +1,8 @@
 /* include/ccsim/wasm/ccsim_api.h
  *
  * C ABI exported by the WebAssembly engine (docs/ARCHITECTURE.md section 8). The same
- * functions build natively, which is how tests/unit/test_wasm_api.cpp exercises them.
+ * functions build natively, which is how tests/unit/test_compare_api.cpp
+ * (wasm_api.*) exercises them; tests/wasm/smoke.mjs checks the Emscripten build in Node.
  *
  * Conventions
  *   - Objects are integer handles (> 0). 0 or a negative return means failure; read the

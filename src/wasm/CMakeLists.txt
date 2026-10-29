@@ -4,7 +4,8 @@ target_link_libraries(ccsim_api PUBLIC ccsim_core)
 target_compile_definitions(ccsim_api PRIVATE CCSIM_VERSION="${PROJECT_VERSION}")
 ccsim_set_warnings(ccsim_api)
 
-# Browser module: only with the Emscripten toolchain (emcmake cmake ...). Not tested yet.
+# Browser module: only with the Emscripten toolchain (emcmake cmake ...). "node" is in
+# ENVIRONMENT so CI can load the same artefact in tests/wasm/smoke.mjs. Not tested locally.
 if(EMSCRIPTEN)
   add_executable(ccsim_wasm wasm_main.cpp)
   target_link_libraries(ccsim_wasm PRIVATE ccsim_api)
@@ -24,7 +25,7 @@ if(EMSCRIPTEN)
   list(JOIN CCSIM_WASM_EXPORTS "," CCSIM_WASM_EXPORT_LIST)
   set_target_properties(ccsim_wasm PROPERTIES OUTPUT_NAME "ccsim" SUFFIX ".mjs")
   target_link_options(ccsim_wasm PRIVATE
-    "-sMODULARIZE=1" "-sEXPORT_ES6=1" "-sENVIRONMENT=worker"
+    "-sMODULARIZE=1" "-sEXPORT_ES6=1" "-sENVIRONMENT=worker,node"
     "-sALLOW_MEMORY_GROWTH=1" "-sMAXIMUM_MEMORY=4GB" "-sWASM_BIGINT=1"
     "-sEXPORTED_FUNCTIONS=${CCSIM_WASM_EXPORT_LIST}"
     "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8,HEAPU8,HEAPU32,HEAPU64")
