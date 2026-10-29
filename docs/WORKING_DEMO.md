@@ -1,8 +1,8 @@
 # Working Demo
 
-Section 1 works today. Sections 2 and 3 describe the v1 target behaviour of `ccsim simulate` and `ccsim monitor`, which are **Planned**: in the current build both commands exit with code 3.
+Section 1 works today. Section 2's results are reproduced exactly by the engine library: they are the golden tests `ctest -L golden` (`tests/golden/test_golden_demos.cpp`, traces in `tests/data/golden/`). The `ccsim simulate` *command* that prints them is still **Planned** and exits with code 3. Section 3 (monitoring) is **Deferred**. On the website these demos run in the browser (ARCHITECTURE.md section 7).
 
-The expected results in section 2 were computed with an independent reference model of the semantics in [TECHNICAL_DESIGN.md sections 5 and 6](TECHNICAL_DESIGN.md#5-access-semantics) and checked by hand. They are the acceptance oracle for the implementation and become golden tests in issue M1-09.
+The expected results in section 2 were computed with an independent reference model of the semantics in [TECHNICAL_DESIGN.md sections 5 and 6](TECHNICAL_DESIGN.md#5-access-semantics) and checked by hand. They are the acceptance oracle for the implementation. The engine was tested against them; they were not copied from it.
 
 ## 1. What works today
 
@@ -20,9 +20,9 @@ Usage: ccsim <command> [options]
 exit code: 2
 ```
 
-## 2. Simulation walkthrough (Planned)
+## 2. Simulation walkthrough (engine: Verified by golden tests; CLI command: Planned)
 
-All demos use 16-byte lines and small latencies (L1 hit 1 cycle, L2 hit 10 cycles, memory 100 cycles) so every number can be checked by hand. The traces use format v1 ([TECHNICAL_DESIGN.md section 7](TECHNICAL_DESIGN.md#7-trace-format-v1)); M1-09 commits them under `tests/data/`.
+All demos use 16-byte lines and small latencies (L1 hit 1 cycle, L2 hit 10 cycles, memory 100 cycles) so every number can be checked by hand. The traces use format v1 ([TECHNICAL_DESIGN.md section 7](TECHNICAL_DESIGN.md#7-trace-format-v1)) and are committed under `tests/data/golden/`. The `ccsim simulate` command lines below show the planned CLI syntax.
 
 ### Demo A: conflict misses and associativity
 
@@ -152,7 +152,7 @@ Exact Random counts depend on the seed and the generator specified in [TECHNICAL
 - Every run satisfies the invariants in [TECHNICAL_DESIGN.md section 6](TECHNICAL_DESIGN.md#6-statistics-and-amat).
 - Demo A with `ways=2,policy=random` gives 4 hits and 2 misses for **any** seed: invalid ways fill first, so no victim is ever chosen.
 
-## 3. Monitoring workflow (Planned)
+## 3. Monitoring workflow (Deferred)
 
 1. **Probe** what this machine exposes: `ccsim monitor --probe`. Every metric is listed with a status and reason. Illustrative output (format not final) mirroring what the validation VM's probe returned:
 
@@ -188,9 +188,11 @@ Expected v1 coverage per OS (all Not tested):
 - **macOS**: in Instruments.app choose CPU Counters, select events (for example L1D load misses), save via File > Save as Template, then run `xcrun xctrace record --template '<template name>' --launch -- ./your-workload` and open the trace in Instruments or export it with `xcrun xctrace export`.
 - **Windows** (elevated): list sources with `wpr -pmcsources`, record with a WPR profile containing a `<HardwareCounter>` element, and inspect the trace in Windows Performance Analyzer.
 
-## 4. Interactive cache debugger demo (Planned)
+## 4. Interactive cache debugger demo
 
-The debugger is the step-through frontend described in [TECHNICAL_DESIGN.md section 12](TECHNICAL_DESIGN.md#12-visualization-architecture). It runs offline and renders the engine's event stream; it never simulates the cache itself. The walkthrough below uses [Demo B](#demo-b-two-level-walkthrough) because every step there is already derived by hand.
+**Status:** engine Implemented; UI Planned.
+
+The debugger is the live-simulation view of the website ([ARCHITECTURE.md section 7](ARCHITECTURE.md#7-stage-3-the-live-simulation)). It runs in the browser against the WebAssembly engine and renders the engine's event stream; it never simulates the cache itself. Step 4 below is already asserted action by action in `golden.demo_b_two_level_every_step`. The walkthrough below uses [Demo B](#demo-b-two-level-walkthrough) because every step there is already derived by hand.
 
 The user's workflow:
 
@@ -210,7 +212,8 @@ Simulation (v1 model):
 - No prefetching, TLB, or virtual-to-physical translation; trace addresses are used as given.
 - Additive latency model; write-backs cost nothing; no memory-level parallelism.
 - One line per access; access size and line-straddling accesses are not modelled.
-- Write-back and write-allocate only; equal L1 and L2 line sizes; no end-of-trace flush.
+- Write-back + write-allocate by default; write-through, no-write-allocate, and inclusive or exclusive L2 are available (contract 1.1, ARCHITECTURE.md section 5.3). Partial stores never allocate below L1, and buffered stores cost no latency.
+- Equal L1 and L2 line sizes; no end-of-trace flush.
 
 Monitoring:
 
@@ -231,6 +234,6 @@ The v1 demo is accepted when every criterion has recorded evidence (CI run or li
 6. **AC-6** `ccsim monitor --probe` lists every catalogue metric with a status and a reason for every non-available status; mock tests cover all five availability values.
 7. **AC-7** No unavailable metric is ever emitted as 0; multiplexed values are flagged `scaled`; a cut-short final interval is flagged `partial`; per-interval deltas sum to the final cumulative values (mock tests).
 8. **AC-8** On each OS where hardware access exists, a probe and a monitored run are recorded and the README matrix is updated from that evidence; elsewhere the reasons shown match TECHNICAL_DESIGN.md section 8.
-9. **AC-9** JSON output carries `"schema"` version 1 and loads in the offline viewer without network access.
+9. **AC-9** JSON output carries `"schema"` version 1 and the website renders it. A full run makes no network request after the site has loaded (all compute is in the engine worker).
 10. **AC-10** Documentation status labels match reality: nothing is marked Implemented or Verified without merged tests or recorded evidence.
 11. **AC-11** The interactive cache debugger (section 4) renders only the engine's event stream: for the golden traces, its per-step grid state, address decomposition, and hit/miss/eviction/write-back display match the corresponding engine events, and its final grid and counters match the section 2 results. It performs no cache simulation of its own.

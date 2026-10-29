@@ -1,5 +1,7 @@
 # Contributing
 
+> **Current working split (2026-10-29):** the project currently runs as tracks: **configuration and policies** (roles 2/3 contract side) and **simulation** (trace → engine → live → analytics → compare), with frontend later. Path ownership, the merge-conflict rules and the shared-contract protocol are in [docs/ARCHITECTURE.md section 12](docs/ARCHITECTURE.md#12-ownership-and-merge-conflict-strategy), and agent rules are in [AGENTS.md](AGENTS.md). Where this file disagrees with them, they win. Hardware monitoring (Role 4) is deferred.
+
 The project is built by a ten-person team organised by role. Issues, pull requests, and documents refer to roles by number (Role 1 to Role 10, or R1 to R10). Map people to roles on the GitHub project board, not in these files.
 
 ## 1. Team roles
@@ -99,7 +101,10 @@ Owning a path means reviewing every change to it and being accountable for its q
 | Trace format v1 | TECHNICAL_DESIGN section 7 | Role 6 | 2, 7, 8 |
 | CLI syntax and exit codes | TECHNICAL_DESIGN section 10, `include/ccsim/cli.hpp` | Role 6 | 1, 5, 7, 9 |
 | Results schema v1 and sample files | TECHNICAL_DESIGN section 11 | Role 6 | 5, 7, 8, 9 |
-| CMake targets and options | `CMakeLists.txt` | Role 10 | All |
+| CMake targets and options | `CMakeLists.txt` (modules add sources via their own `src/<module>/CMakeLists.txt`) | Role 10 | All |
+| Contract extension 1.1 (inclusion, write policies) | `include/ccsim/sim/types.hpp`, ARCHITECTURE section 5.2 | Shared, append-only | All |
+| Engine event stream and C ABI | `include/ccsim/sim/events.hpp`, `include/ccsim/wasm/ccsim_api.h` | Simulation track | Frontend |
+| Standard dataset | `tests/data/standard/` | Simulation track | All (read-only) |
 
 Rules:
 
@@ -225,7 +230,7 @@ Suggested labels: `milestone:M1` to `milestone:M4`, `role:R1` to `role:R10`, `ty
 - Open a draft PR early. Keep PRs focused, ideally under 400 changed lines excluding fixtures and vendored code.
 - Record decisions in the issue or PR; the module owner decides inside a module and Role 1 decides across modules.
 - Change a status label (Planned, Partially implemented, Implemented; Verified, Not tested) only in the PR that provides the code, tests, or evidence.
-- Never commit secrets, binaries, generated results, or large datasets. Test traces stay small, textual, and reviewed.
+- Never commit secrets, binaries, generated results, or large datasets. Test traces stay small, textual, and reviewed. Two documented exceptions: the standard dataset `tests/data/standard/matmul64-O0.trace.gz` (1.2 MB, checksum-pinned), and the curated evidence files listed in `tests/results/README.md`.
 - Review requests get a response within two working days; if blocked, ask the owning role, then Role 1.
 
 ## 6. Git workflow
@@ -282,8 +287,8 @@ Reviewers check correctness against TECHNICAL_DESIGN, determinism, portability, 
 - **Mocked monitoring tests**: run by default on every OS through the mock backend and must cover every availability value, multiplexing scaling, and partial intervals.
 - **Hardware tests**: labelled `hardware`, excluded from CI (`ctest -LE hardware`), and exit with code 77 when counters are unavailable. Registered with the CTest property `SKIP_RETURN_CODE 77`, they show as skipped, never as passed.
 - **OS-specific validation**: run hardware tests manually on each OS where possible. Record OS version, CPU model, kernel or build number, privilege level, and output in the PR; Role 9 updates the README matrix only from such evidence.
-- **Naming and labels**: tests are named `<area>.<behaviour>` (for example `sim.writeback_routing`); labels are `smoke`, `unit`, `e2e`, `hardware`, `bench`.
-- **Assertions**: use the framework's checks (doctest from M1-04) or the smoke test's `CHECK`, never `assert()`, which Release builds remove.
+- **Naming and labels**: tests are named `<area>.<behaviour>` (for example `sim.writeback_routing`); labels are `smoke`, `unit`, `golden`, `stress`, `dataset`, `bench` (opt-in), plus `e2e` and `hardware` when those suites exist.
+- **Assertions**: use the checks in `tests/support/harness.hpp` (`CHECK`, `CHECK_EQ`, `CHECK_NEAR`, `CHECK_THROWS_AS`), never `assert()`, which Release builds remove. Doctest (M1-04) may replace the harness later without changing test bodies much.
 - **Sanitizers**: the ASan and UBSan job stays green once M2-15 lands.
 - **Fixtures**: text files under 100 KB with a header comment that states their purpose and where the expected results come from.
 

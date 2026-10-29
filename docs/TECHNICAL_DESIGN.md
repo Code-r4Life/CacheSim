@@ -1,6 +1,10 @@
 # Technical Design
 
-Status labels: **Implemented**, **Partially implemented**, **Planned**. Unless a section says otherwise, it describes the **Planned** v1 target. Today only the CLI shell exists (Partially implemented: `--help`, `--version`, exit codes). The contracts in sections 7 and 9-11 are frozen at the end of Milestone 1; after that they change only through the protocol in [CONTRIBUTING.md](../CONTRIBUTING.md#2-shared-interfaces-and-ownership-boundaries).
+Status labels: **Implemented**, **Partially implemented**, **Planned**, **Deferred**.
+
+> **Read [ARCHITECTURE.md](ARCHITECTURE.md) first.** It is the top-level source of truth: the product is now a deployed website with the engine compiled to WebAssembly, the cache model gains contract extension 1.1 (inclusion and write policies), and hardware monitoring is **Deferred**. This document keeps the exact v1 rules that ARCHITECTURE.md builds on.
+
+Implementation status (2026-10-29): trace reader (section 7), address mapping (4), cache levels and hierarchy (5), statistics and AMAT (6), event stream (12) and analytics are **Implemented** as library code with tests (`tests/`). Production replacement policies and `validate()` (configuration track), the `simulate` CLI options, and the web UI are **Planned**. Monitoring (section 8) is **Deferred**. The contracts in sections 7 and 9-11 are frozen at the end of Milestone 1; after that they change only through the protocol in [CONTRIBUTING.md](../CONTRIBUTING.md#2-shared-interfaces-and-ownership-boundaries).
 
 ## 1. Scope
 
@@ -15,18 +19,22 @@ Out of scope for v1: multicore and coherence, prefetching, TLB and virtual-memor
 
 The component diagram is in the [README](../README.md#architecture). Module boundaries:
 
-| Module | Planned location | Owner | Status |
+| Module | Location | Track (ARCHITECTURE 12) | Status |
 |---|---|---|---|
-| CLI shell and exit codes | `include/ccsim/cli.hpp`, `src/cli.cpp`, `src/main.cpp` | Role 6 | Partially implemented |
-| Core types and config validation | `include/ccsim/sim/types.hpp` | Role 2 | Planned |
-| Cache levels, hierarchy, statistics, AMAT | `include/ccsim/sim/`, `src/sim/` | Role 2 | Planned |
-| Replacement policies | `include/ccsim/policy/`, `src/policy/` | Role 3 | Planned |
-| Trace reader, cache-spec parser, JSON/CSV writers | `include/ccsim/io/`, `src/io/` | Role 6 | Planned |
-| Console report | `src/report/` | Role 5 | Planned |
-| Monitor interface, sampler, mock backend | `include/ccsim/monitor/`, `src/monitor/`, `src/monitor/mock/` | Role 4 | Planned |
-| Platform backends | `src/monitor/linux/`, `src/monitor/windows/`, `src/monitor/macos/` | Role 4 | Planned |
-| Offline results viewer | `web/` | Role 5 | Planned |
-| Trace generator and benchmarks | `tools/tracegen/`, `bench/` | Role 8 | Planned |
+| CLI shell and exit codes | `include/ccsim/cli.hpp`, `src/cli.cpp`, `src/main.cpp` | Simulation | Partially implemented |
+| Core types (shared contract, extension 1.1) | `include/ccsim/sim/types.hpp` | Shared | Implemented (header) |
+| Config validation, spec parsing, presets | `include/ccsim/config/`, `src/config/` | Configuration | Planned |
+| Replacement policies | `include/ccsim/policy/`, `src/policy/` | Configuration | Interface implemented; policies Planned (test stand-ins in `tests/support/`) |
+| Trace reader (format v1) | `include/ccsim/io/`, `src/io/` | Simulation | Implemented |
+| Geometry, cache levels, hierarchy, statistics, AMAT, events | `include/ccsim/sim/`, `src/sim/` | Simulation | Implemented |
+| Analytics: metrics, 3C, reuse distance | `include/ccsim/analytics/`, `src/analytics/` | Simulation | Implemented |
+| Live session and batch runner | `include/ccsim/session/`, `src/session/` | Simulation | Implemented |
+| JSON results and events | `include/ccsim/report/`, `src/report/` | Simulation | Implemented |
+| Sweeps and comparison | `include/ccsim/compare/`, `src/compare/` | Simulation | Implemented |
+| WebAssembly C ABI | `include/ccsim/wasm/`, `src/wasm/` | Simulation | Implemented natively; Emscripten build Not tested |
+| Website | `web/` | Frontend | Planned |
+| Test suites, standard dataset, benchmarks | `tests/` | Simulation | Implemented |
+| Monitor interface, sampler, backends | `include/ccsim/monitor/`, `src/monitor/` | — | Deferred |
 
 Directories are created by the first PR that adds code to them; the initial commit contains only what builds today.
 
@@ -47,6 +55,8 @@ Design rules:
 | `policy` | `lru`, `fifo`, or `random` | |
 | `latency` | Hit latency in cycles | At least 1 |
 | `sets` (derived) | `size / (line * ways)` | Power of two, at least 1 |
+
+Contract extension 1.1 adds `write_policy` (`write_back` | `write_through`) and `write_miss_policy` (`write_allocate` | `no_write_allocate`) per level, and `inclusion` (`non_inclusive` | `inclusive` | `exclusive`) for the hierarchy. The defaults are the v1 behaviour. Full table: [ARCHITECTURE.md section 5.1](ARCHITECTURE.md#51-configuration-surface).
 
 Only the set count must be a power of two, so capacities such as 48 KiB with 12 ways and 64-byte lines (64 sets) are valid. Hierarchy-wide settings: optional L2, memory latency in cycles (at least 1), and a 64-bit seed for the Random policy (default 1). v1 requires the L1 and L2 line sizes to be equal.
 
@@ -75,7 +85,7 @@ Example: a 64-byte, 2-way cache with 16-byte lines has 2 sets, 4 offset bits and
 3. If the chosen way holds a valid line, count an **eviction**; if that line is dirty, also count a **write-back** and send it to the next level.
 4. Fetch the line from the next level, install it, and call `on_fill`. Write misses use **write-allocate**: fetch, install, then mark dirty.
 
-Both levels are **write-back** with **write-allocate** in v1.
+Both levels are **write-back** with **write-allocate** by default. Write-through, no-write-allocate, inclusive and exclusive hierarchies are contract extension 1.1; their order of operations is normative in [ARCHITECTURE.md section 5.3](ARCHITECTURE.md#53-order-of-operations). Sections 5.1 to 5.3 here remain exactly true for the defaults.
 
 ### 5.2 L1/L2 hierarchy
 
@@ -118,7 +128,7 @@ Counters are `std::uint64_t` per level:
 
 Derived rates: `miss_rate = misses / accesses`; for L2, `local_miss_rate = L2.misses / L2.accesses` and `global_miss_rate = L2.misses / L1.accesses`. A rate with a zero denominator is reported as `null` (JSON) or `n/a` (text, CSV), never `0` or `NaN`.
 
-Invariants (checked by tests):
+Invariants (checked by tests; with the 1.1 counters, which are all 0 under the defaults, the general forms are in [ARCHITECTURE.md section 5.4](ARCHITECTURE.md#54-invariants-checked-on-every-run-in-tests)):
 
 - `hits + misses == accesses`, `read_misses + write_misses == misses`, and for L1 `reads + writes == accesses`
 - `writebacks <= evictions`, and for L1 `evictions <= misses`
@@ -145,6 +155,8 @@ W 0x7ffd1a28   # trailing comments are allowed
 - File extension: `.trace`. Importers for Valgrind Lackey and Dinero formats are post-v1 candidates.
 
 ## 8. Hardware monitoring
+
+> **Deferred** (2026-10-29). The project now focuses on the simulation website. This section is kept unchanged as the design for a later CLI-only `ccsim monitor`; nothing in it is being built.
 
 ### 8.1 Principles
 
@@ -187,7 +199,7 @@ W 0x7ffd1a28   # trailing comments are allowed
 
 - macOS has no public API for programmable PMU events. Private frameworks (`kperf`, `kpc`) are not used: unsupported, root-only, and liable to break between releases.
 - **v1 backend**: `proc_pid_rusage(pid, RUSAGE_INFO_V4, ...)` from `<libproc.h>` returns cumulative per-process `ri_instructions` and `ri_cycles` (XNU `rusage_info_v4`). Whether these fields are populated on every Mac model and OS version is Not tested, so the probe runs a short busy loop and reports `unsupported` if the counters do not advance.
-- **Cache events** are available only through Instruments' CPU Counters instrument (full Xcode). The template must be configured once in Instruments.app and saved before `xcrun xctrace record --template '<name>' --launch -- <cmd>` records any events. v1 documents this as a manual workflow ([WORKING_DEMO.md](WORKING_DEMO.md#3-monitoring-workflow-planned)), so cache metrics are `unsupported` in `ccsim` on macOS.
+- **Cache events** are available only through Instruments' CPU Counters instrument (full Xcode). The template must be configured once in Instruments.app and saved before `xcrun xctrace record --template '<name>' --launch -- <cmd>` records any events. v1 documents this as a manual workflow ([WORKING_DEMO.md](WORKING_DEMO.md#3-monitoring-workflow-deferred)), so cache metrics are `unsupported` in `ccsim` on macOS.
 - `powermetrics` requires root and reports power, frequency and residency, not cache hits or misses. It is outside the v1 metric set.
 
 ### 8.6 Sampling semantics
@@ -201,6 +213,8 @@ W 0x7ffd1a28   # trailing comments are allowed
 Real caches use physical addresses, hashed or sliced set indexing, hardware prefetchers, pseudo-LRU, and inclusion policies, and they are shared with the OS and other processes. Use monitoring for trends, such as the L1D miss ratio rising once the working set exceeds L1 capacity, not for numeric agreement with the simulator.
 
 ## 9. Module interfaces
+
+> The headers under `include/ccsim/` are now authoritative. Where a sketch below differs from a header, the header wins. Notable growth: `Hierarchy` also takes a `PolicyFactory` and exposes `step(access, AccessEvent*)`, and `TraceReader` is joined by a chunk-fed `TraceParser`. See ARCHITECTURE.md sections 6 to 8.
 
 Sketches of the v1 contracts. Owners finalize them in Milestone 1 (issues M1-05 to M1-08). Configuration and input errors throw exceptions derived from `std::runtime_error`, which the CLI maps to exit code 1. Monitoring availability is data, not an exception.
 
@@ -438,7 +452,7 @@ Both examples are abbreviated. The simulation values are Demo B's expected resul
 
 ## 12. Visualization architecture
 
-**Planned.** The static results viewer (section 2, `web/`) renders the aggregate JSON of a finished run. The **interactive cache debugger** is a second, optional frontend mode (Role 5) that steps through a trace one access at a time and shows what the cache does at each step. Both are offline, no-network consumers; neither ships before the engine and schema they depend on.
+**Engine side Implemented; UI Planned.** The interactive debugger (the live simulation) is now in v1 scope and is the centrepiece of the website. The engine runs in a Web Worker as WebAssembly and streams events to the UI. The decision and its numbers are in [ARCHITECTURE.md section 4](ARCHITECTURE.md#4-the-api-decision-webassembly-in-a-web-worker-not-fastapi), and the playback model is in [section 7](ARCHITECTURE.md#7-stage-3-the-live-simulation). The rule in 12.1 is unchanged and enforced.
 
 ### 12.1 One simulator, not two
 
@@ -454,6 +468,8 @@ All four are driven from the event stream (12.3); none holds cache logic of its 
 - **Decision panel** — the per-access outcome in words: hit or miss at each level, which way was chosen (invalid-first, else the policy's victim), whether an eviction and write-back occurred, and the policy's reason for the victim (LRU: the least-recently-used way; FIFO: the earliest inserted; Random: the drawn index). This mirrors the "What to notice" narration in [WORKING_DEMO.md Demo B](WORKING_DEMO.md#demo-b-two-level-walkthrough).
 
 ### 12.3 Engine event stream
+
+> **Implemented** (`include/ccsim/sim/events.hpp`). The shipped shape differs from the sketch below in one deliberate way: an event carries an **ordered action log** (`lookup`, `evict`, `writeback`, `fill`, `back_invalidate`, `move_out`, `memory_read`, …) instead of nested per-level objects, because one access can evict two L2 lines (write-back plus demand fill) and the UI must animate them in order. In the browser, events travel as a binary `Uint32Array` (ABI layout in `include/ccsim/wasm/ccsim_api.h`); `event_to_json()` produces the NDJSON form for files. See ARCHITECTURE.md section 7.2.
 
 Emission is opt-in (planned `ccsim simulate --emit-events <file>`), so the default batch path and its throughput are unchanged. The stream is newline-delimited JSON — one event per line, in access order, echoing the one-access-per-line trace format (section 7) — and is as deterministic as the run that produced it: the same trace, configuration, and seed give byte-identical events on every OS. The schema id is `ccsim.events/1`, versioned like the results schema (section 11), and consumers ignore unknown fields.
 
@@ -493,8 +509,9 @@ The debugger holds the event list and a cursor; it does not re-run the engine to
 | Ship the elevated Windows ETW backend in v1 or defer it | Role 1 with Role 4 | End of M2 |
 | UTF-8 path strategy on Windows | Role 6 | M1 |
 | Different L1 and L2 line sizes | Role 2 | Post-v1 |
-| Localhost server for the viewer (`ccsim serve`) | Role 1 | Post-v1; not in v1 |
-| Event stream schema (`ccsim.events/1`) and the interactive cache debugger in v1 (section 12) | Role 1 with Roles 2, 5 | Post-v1 unless pulled into scope |
+| ~~Localhost server for the viewer (`ccsim serve`)~~ | Decided 2026-10-29 | Superseded: the engine runs in the browser as WebAssembly (ARCHITECTURE.md section 4) |
+| ~~Event stream schema and the interactive debugger in v1~~ | Decided 2026-10-29 | In v1; engine side Implemented (ARCHITECTURE.md section 7) |
+| Belady OPT interface, checkpoints, very large traces | Simulation + configuration tracks | See ARCHITECTURE.md section 17 |
 | Lackey and Dinero trace importers | Role 6 | Post-v1 |
 | Project license | Role 1 | Before the repository is made public |
 

@@ -1,69 +1,99 @@
 # CPU Cache Simulator (`ccsim`)
 
-A portable C++17 tool with two modes: a deterministic **L1/L2 cache simulator** driven by memory traces, and an **interval-based hardware monitor** that reports the CPU performance counters a platform actually exposes, and says so when it does not.
+A deterministic **L1/L2 cache simulator** written in portable C++17 and delivered as a **website**: configure a hierarchy, upload a memory trace, watch every access live, analyse the run, and benchmark configurations against each other. The engine compiles to WebAssembly and runs in the visitor's browser.
 
-> **Status: foundation, v0.1.0.** The build system, CLI shell, and smoke tests are in place. Both modes are **Planned**: `ccsim simulate` and `ccsim monitor` currently exit with code 3 (not implemented).
+> **Status: v0.1.0, engine phase.** The simulation engine, live-session API, analytics, comparison, browser C ABI, test suites and the validated standard dataset are **Implemented** as library code (Linux-verified). Production replacement policies and `validate()` (configuration track), the `simulate` CLI command and the web UI are **Planned**. Hardware monitoring is **Deferred**.
+>
+> **New here? Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).** Contributors and AI agents: read [AGENTS.md](AGENTS.md). Configuration track: read [NOTICE.md](NOTICE.md).
 
 ## Features
 
-| Feature | Mode | Status |
-|---|---|---|
-| CLI shell: `--help`, `--version`, documented exit codes | Both | Implemented |
-| L1 and optional L2 with configurable size, line size, associativity, hit latency | Simulation | Planned |
-| Replacement policies: LRU, FIFO, seeded Random (reproducible across OSes) | Simulation | Planned |
-| Text memory traces (format v1) with line-numbered errors | Simulation | Planned |
-| Per-level hits, misses, evictions, write-backs; memory traffic | Simulation | Planned |
-| Estimated AMAT | Simulation | Planned |
-| Interval sampling of a launched command | Monitoring | Planned |
-| Linux backend: `perf_event_open` | Monitoring | Planned |
-| Windows backend: OS cycle accounting; elevated ETW PMU path under evaluation | Monitoring | Planned |
-| macOS backend: `proc_pid_rusage` cycles and instructions | Monitoring | Planned |
-| Unavailable metrics reported as `unsupported` or `permission_denied` with a reason, never as zero | Monitoring | Planned |
-| JSON and CSV export; offline web viewer | Both | Planned |
+| Feature | Status |
+|---|---|
+| L1 + optional L2: size, line size, associativity, hit latency, memory latency | Implemented (engine) |
+| Inclusive / exclusive / non-inclusive L2; write-back / write-through; write-allocate / no-write-allocate | Implemented (engine, contract 1.1) |
+| Replacement policies LRU, FIFO, seeded Random | Interface + test stand-ins; production Planned (configuration track) |
+| Trace format v1 (`.trace`, `.trace.gz` in the browser), streaming parser with line-numbered errors | Implemented |
+| Live simulation API: step, run to breakpoint, seek, reset, per-access action log | Implemented (engine); UI Planned |
+| Analytics: hit/miss rates, AMAT and its exact breakdown, 3C classification, reuse distance and miss-ratio curve, set heatmaps, timeline | Implemented (engine); charts Planned |
+| Comparison: parameter sweeps, per-metric deltas and winner, JSON / CSV / text log | Implemented (engine); views Planned |
+| WebAssembly C ABI for the website | Implemented and tested natively; Emscripten build Not tested |
+| `ccsim simulate` CLI command | Planned |
+| Hardware monitoring (`ccsim monitor`) | Deferred |
 
 ## Technology stack
 
-- C++17 (ISO, no compiler extensions) and the standard library; no runtime dependencies
-- CMake 3.20 or newer, with CTest
-- MSVC on Windows, GCC or Clang on Linux, Apple Clang on macOS
-- Monitoring interfaces: `perf_event_open` (Linux), Win32 and ETW (Windows), `libproc` (macOS)
-- Viewer (planned): static HTML and JavaScript, no build step, no CDN, works offline
-- No cloud services, paid APIs, or network access at run time
+- **Engine:** ISO C++17 and the standard library, with no runtime dependencies; CMake 3.20+ and CTest
+- **Browser:** the same engine compiled with Emscripten to WebAssembly, running in a Web Worker
+- **Website (Planned):** React 18 + TypeScript + Vite, Apache ECharts, canvas grids; static hosting on Cloudflare Pages
+- **Why not a Python/FastAPI backend:** see [ARCHITECTURE.md section 4](docs/ARCHITECTURE.md#4-the-api-decision-webassembly-in-a-web-worker-not-fastapi)
+- No server-side compute; traces never leave the user's machine
 
 ## Architecture
 
 ```mermaid
-flowchart TB
-    subgraph Interfaces
-        CLI["ccsim CLI<br/>(Partially implemented)"]
-        VIEW["Offline web viewer<br/>(Planned)"]
+flowchart LR
+    subgraph Browser
+        UI["React UI"] <-->|"postMessage"| W["Web Worker<br/>ccsim.wasm"]
     end
-    subgraph Core["ccsim_core: portable C++17 library"]
-        IO["I/O and API<br/>traces, cache specs, JSON/CSV"]
-        SIM["Simulation engine<br/>L1/L2, statistics, AMAT"]
-        POL["Replacement policies<br/>LRU, FIFO, Random"]
-        SAMP["Monitoring sampler<br/>interval deltas, availability"]
+    subgraph Core["ccsim_core (C++17)"]
+        IO["io: trace parser"] --> SIM["sim: L1/L2 engine + events"]
+        POL["policy: LRU/FIFO/Random"] --> SIM
+        SIM --> AN["analytics: metrics, 3C, reuse"]
+        AN --> SES["session: live control"]
+        AN --> CMP["compare: sweeps, deltas"]
     end
-    subgraph Backends["Monitoring backends: one per OS, behind one interface"]
-        LNX["Linux<br/>perf_event_open"]
-        WIN["Windows<br/>QueryProcessCycleTime, ETW"]
-        MAC["macOS<br/>proc_pid_rusage"]
-        MOCK["Mock<br/>tests on any OS"]
-    end
-    TRACE[("Trace files")] --> IO
-    CLI --> IO
-    IO --> SIM
-    SIM --> POL
-    IO --> SAMP
-    SAMP --> LNX
-    SAMP --> WIN
-    SAMP --> MAC
-    SAMP --> MOCK
-    IO --> OUT[("JSON / CSV results")]
-    OUT --> VIEW
+    W --- Core
+    CLI["ccsim CLI + tests"] --- Core
 ```
 
-All portable logic lives in `ccsim_core`; the CLI and viewer are thin consumers. Only the monitoring backends touch OS APIs, each compiled only on its own platform, and a mock backend makes monitoring logic testable everywhere. Details: [docs/TECHNICAL_DESIGN.md](docs/TECHNICAL_DESIGN.md).
+Full design, ownership and the merge-conflict strategy: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Repository structure
+
+Owner tags: **[shared]** append-only contract, **[config]** configuration track, unmarked = simulation track. `(Planned)` paths do not exist yet. Layering rules: [ARCHITECTURE.md section 11](docs/ARCHITECTURE.md#11-repository-structure-and-layering).
+
+```text
+CacheSim/
+├── README.md  CONTRIBUTING.md
+├── AGENTS.md  NOTICE.md            [shared] rules for agents/contributors · notice to the config track
+├── CMakeLists.txt                  [shared] options; auto-discovers src/<module>/CMakeLists.txt
+├── .gitattributes  .gitignore      LF line endings; whitelist for tests/results/
+├── .github/workflows/ci.yml        GCC, Clang, ASan + UBSan native suites; Emscripten build + Node smoke
+├── docs/                           ARCHITECTURE [shared] · TECHNICAL_DESIGN · FRONTEND_DESIGN · WORKING_DEMO · DEVELOPMENT · OVERVIEW
+├── assets/images/                  UI mood-board screenshots
+├── include/ccsim/                  public headers, one folder per module
+│   ├── sim/types.hpp               [shared] config, stats, enums, policy name table (contract 1.1)
+│   ├── policy/                     [config] replacement_policy.hpp: ReplacementPolicy, make_policy
+│   ├── config/                     [config] (Planned) validate(), spec parsing, presets
+│   ├── io/                         trace.hpp: streaming parser, compact Trace storage
+│   ├── sim/                        geometry · line_index · cache_level · events · hierarchy
+│   ├── analytics/                  metrics · miss_classifier (3C) · reuse (distance, miss-ratio curve)
+│   ├── session/                    session.hpp: step / run / seek / reset, batch runner
+│   ├── report/                     json.hpp: ccsim.simulation/1 and ccsim.events/1 writers
+│   ├── compare/                    compare.hpp: sweeps, deltas, JSON / CSV / log
+│   ├── wasm/                       ccsim_api.h: C ABI for the browser
+│   └── cli.hpp
+├── src/
+│   ├── io/ sim/ analytics/ session/ report/ compare/   *.cpp + one CMakeLists.txt each
+│   ├── policy/  config/            [config] (Planned) production policies, validate()
+│   ├── wasm/                       C ABI implementation + Emscripten target (built only under emcc)
+│   └── cli.cpp  main.cpp           the ccsim executable
+├── tests/
+│   ├── CMakeLists.txt              suites discovered by glob; labels smoke/unit/golden/stress/dataset/bench
+│   ├── support/                    harness, fixtures, reference policies (TEST-ONLY, never shipped)
+│   ├── smoke/                      CLI contract
+│   ├── unit/                       per-module tests (test_policy_*, test_config_* are [config])
+│   ├── golden/                     WORKING_DEMO Demos A–C, hand-derived expectations
+│   ├── stress/                     invariants over 72 configurations × 1M accesses
+│   ├── dataset/                    standard dataset integrity, regression baselines, fitness report
+│   ├── bench/                      throughput benchmarks (opt-in)
+│   ├── wasm/smoke.mjs              loads the Emscripten module in Node, checks the ABI on Demo B
+│   ├── data/golden/                demo_a_conflict / demo_b_two_level / demo_c_belady .trace
+│   ├── data/standard/              matmul64-O0.trace.gz (pinned, never modify) + matmul.c + manifest
+│   └── results/                    generated evidence; only the files in its README are committed
+└── web/                            (Planned) React + TypeScript frontend, frontend track
+```
 
 ## Quick start
 
@@ -74,7 +104,7 @@ Linux and macOS:
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-ctest --test-dir build --output-on-failure
+ctest --test-dir build --output-on-failure      # smoke, unit, golden, stress, dataset
 ./build/ccsim --version
 ```
 
@@ -98,7 +128,8 @@ Feature status is in the [Features](#features) table. Roadmap and ownership: [CO
 | Capability | Linux | Windows | macOS |
 |---|---|---|---|
 | Configure, build, smoke tests | Verified [1] | Not tested [2] | Not tested |
-| Cache simulation | Not tested (Planned) | Not tested (Planned) | Not tested (Planned) |
+| Cache simulation engine (library, all test suites) | Verified [7] | Not tested | Not tested |
+| WebAssembly build | Not tested | Not tested | Not tested |
 | Monitoring: cycles, instructions | Not tested (Planned) | Not tested (Planned) [3] | Not tested (Planned) |
 | Monitoring: L1D loads and misses | Not tested (Planned) | Not tested (Planned) [4] | Unsupported [5] |
 | Monitoring: L2 accesses and misses | Not tested (Planned) [6] | Not tested (Planned) [4] | Unsupported [5] |
@@ -110,6 +141,9 @@ Feature status is in the [Features](#features) table. Roadmap and ownership: [CO
 4. Possible only through ETW PMU sources: elevated, CPU-specific, custom events since Windows 10 1903.
 5. Cache events are exposed only through Instruments' CPU Counters (full Xcode). v1 documents that manual workflow instead of automating it.
 6. `perf_event_open` has no generic L2 event; CPU-specific raw event codes are required.
+7. 2026-10-29, Kali rolling x86-64: GCC 16.2 Release, GCC Debug with ASan + UBSan, Clang Release; CMake 4.4 + Ninja; warnings as errors; all suites green ([tests/results/](tests/results/)).
+
+Monitoring rows below are **Deferred** and kept for the record.
 
 Hardware counters were not validated anywhere yet: the validation VM exposes no PMU (hardware events fail with `ENOENT`). See [TECHNICAL_DESIGN.md section 8.3](docs/TECHNICAL_DESIGN.md#83-linux).
 
@@ -117,10 +151,14 @@ Hardware counters were not validated anywhere yet: the validation VM exposes no 
 
 | Document | Contents |
 |---|---|
-| [docs/TECHNICAL_DESIGN.md](docs/TECHNICAL_DESIGN.md) | Architecture, cache model, L1/L2 semantics, policies, AMAT, monitoring per OS, interfaces |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | **Start here.** The whole system: API decision, cache model, live simulation, analytics, comparison, layout, ownership, performance, deployment |
+| [AGENTS.md](AGENTS.md) | Rules for AI agents and contributors |
+| [NOTICE.md](NOTICE.md) | What the configuration track must follow to stay in sync |
+| [tests/data/standard/README.md](tests/data/standard/README.md) | The standard benchmark dataset: manifest, fitness evidence, profiles |
+| [docs/TECHNICAL_DESIGN.md](docs/TECHNICAL_DESIGN.md) | Exact v1 rules: cache model, trace format, statistics, interfaces (monitoring deferred) |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Per-OS prerequisites, build, test, debug, troubleshooting |
 | [docs/WORKING_DEMO.md](docs/WORKING_DEMO.md) | Walkthroughs, sample traces, expected results, acceptance criteria |
-| [docs/FRONTEND_DESIGN.md](docs/FRONTEND_DESIGN.md) | Web UI views, visualization layout, and the frontend-to-backend API |
+| [docs/FRONTEND_DESIGN.md](docs/FRONTEND_DESIGN.md) | Web UI views and layout |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Roles, milestones, issues, Git workflow, reviews, testing, Definition of Done |
 
 ## License

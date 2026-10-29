@@ -1,6 +1,6 @@
 # Frontend Design
 
-**Planned.** This document specifies the `ccsim` web frontend (Role 5, `web/`): what it looks like, how it is laid out, and — the part that is a contract — **how it talks to the backend and through which API**. Nothing here is built yet; the current repository ships only the CLI shell. The frontend is gated on the engine, the results schema, and the event stream it consumes ([TECHNICAL_DESIGN.md sections 11 and 12](TECHNICAL_DESIGN.md#11-output-schema-v1)).
+**Planned.** This document specifies the `ccsim` web frontend (`web/`): what it looks like and how it is laid out. **How it talks to the engine is defined in [ARCHITECTURE.md sections 4, 7 and 8](ARCHITECTURE.md#4-the-api-decision-webassembly-in-a-web-worker-not-fastapi)**: the site is deployed publicly, and the C++ engine runs inside the visitor's browser as WebAssembly in a Web Worker. The engine side (events, analytics, comparison, C ABI) is Implemented and tested; the UI is not built yet.
 
 The four screenshots under [`assets/images/`](../assets/images) are **visual references** for look and feel — layout density, dark theme, component style — taken from existing dashboards and one cache simulator. They are mood boards, not the target product; the content in every view is `ccsim`'s own data. Each view below names the reference it adapts.
 
@@ -9,8 +9,8 @@ The four screenshots under [`assets/images/`](../assets/images) are **visual ref
 These follow directly from the architecture rules in [TECHNICAL_DESIGN.md section 2](TECHNICAL_DESIGN.md#2-architecture); the frontend inherits them rather than inventing its own.
 
 1. **The frontend never simulates.** It decodes no address, decides no hit, and chooses no victim. The engine (`ccsim_core`, Role 2) is the single source of truth; the UI renders the data the engine emits and nothing more. A hit shown on screen is a hit the engine reported. This is the AC-11 equality in [WORKING_DEMO.md section 4](WORKING_DEMO.md#4-interactive-cache-debugger-demo).
-2. **Offline-first.** v1 runs from static files with no network access, no CDN, and no build step required to open it (README [technology stack](../README.md#technology-stack)). A live backend connection is an optional, later transport (section 7), not a dependency of the core experience.
-3. **Honest reporting.** Anything the engine marks unavailable (`null`, `n/a`, a monitoring `unsupported`/`permission_denied` reason) is shown as such, with the reason, never as `0` and never silently hidden ([TECHNICAL_DESIGN.md section 8.1](TECHNICAL_DESIGN.md#81-principles)).
+2. **Client-side compute.** The site is static files on a CDN. All simulation happens in a Web Worker running `ccsim.wasm`. Traces never leave the user's machine, and no server is involved in a run (ARCHITECTURE.md section 4).
+3. **Honest reporting.** Anything the engine marks unavailable (`null`, `n/a`) is shown as such, never as `0` and never silently hidden.
 4. **Deterministic in, deterministic out.** The same result file renders identically every time and on every browser; the UI adds no randomness of its own.
 5. **Accessible and themeable.** Keyboard-operable controls, labelled state (never color alone), a data-table view behind every chart, and a selected dark theme — not an automatic invert.
 
@@ -53,10 +53,13 @@ A **run** is the shared object all four views revolve around: one `HierarchyConf
 | Hit latency | `CacheConfig.hit_latency_cycles` | ≥ 1 |
 | Memory latency | `HierarchyConfig.memory_latency_cycles` | ≥ 1 |
 | Seed | `HierarchyConfig.seed` | 64-bit; only meaningful for Random |
+| Write policy (per level) | `CacheConfig.write_policy` | `write_back` \| `write_through` |
+| Write-miss policy (per level) | `CacheConfig.write_miss_policy` | `write_allocate` \| `no_write_allocate` |
+| Inclusion (hierarchy, L2 only) | `HierarchyConfig.inclusion` | `non_inclusive` \| `inclusive` \| `exclusive` |
 
 The derived **set count** (`size / (line × ways)`) is shown live so the user sees the organisation the engine will build, and the address-split preview (tag/index/offset widths) updates with it — the same decomposition view 2 uses, computed from config, not simulated.
 
-**Workload.** A trace is either **uploaded** (`.trace`, format v1, [section 7](TECHNICAL_DESIGN.md#7-trace-format-v1)) or **generated** from the synthetic generator's patterns — sequential, strided, random, loop (Role 8, issue M2‑13). Parse errors from a bad upload surface as `<file>:<line>: <message>`, exactly as the backend reports them, with no result rendered.
+**Workload.** A trace is either **uploaded** (`.trace` or `.trace.gz`, format v1, [section 7](TECHNICAL_DESIGN.md#7-trace-format-v1); streamed through `DecompressionStream` into the worker with a progress bar, ARCHITECTURE.md section 6), picked from the **standard dataset** (`matmul64-O0`), or **generated** from the synthetic generator's patterns — sequential, strided, random, loop (Role 8, issue M2‑13). Parse errors from a bad upload surface as `<file>:<line>: <message>`, exactly as the backend reports them, with no result rendered.
 
 **Run.** The primary button produces a run (section 7 describes the two transports that back it) and routes the user to the cache visualizer, with analytics and comparison now populated.
 
@@ -115,93 +118,49 @@ Chart choices follow the `dataviz` method (form first, then color, then validate
 
 A comparison needs no new engine capability: it is several `simulate` runs over one trace, each yielding a `ccsim.simulation/1` document, aggregated in the browser.
 
-## 7. Frontend ↔ backend contract (the API)
+## 7. Frontend ↔ engine contract (the API)
 
-The "backend" is `ccsim_core` behind the `ccsim` CLI (Roles 2, 3, 6). There are **two transports**, and the frontend is written against the *schemas*, so the same view code works over either.
+This section was rewritten on 2026-10-29. The earlier plan (an offline file picker, later a localhost `ccsim serve`) is **superseded**, because the product is a deployed website. The contract is now:
 
-### 7.1 Transport A — file-based (v1, offline, no new contract)
-
-This is the v1 path and it reuses contracts that already exist; it adds **no** network API.
-
-1. The user runs the backend (or the app shells out to it over transport B) to produce files:
-
-   ```bash
-   # aggregate result for views 1, 3, 4
-   ccsim simulate --trace demo_b.trace --format json --output run.json \
-     --l1 size=64,line=16,ways=2,policy=lru,latency=1 \
-     --l2 size=128,line=16,ways=2,policy=lru,latency=10 --memory-latency 100
-   # per-access event stream for view 2 (planned flag, section 12.3)
-   ccsim simulate --trace demo_b.trace --emit-events run.events.ndjson [...same config...]
-   ```
-
-2. The frontend loads those files through a file picker (no fetch, no server) and renders them.
-
-**Payloads** are the frozen schemas — the frontend parses, it does not define them:
-
-| View needs | Schema | Produced by | Spec |
-|---|---|---|---|
-| Rates, traffic, AMAT, per-level counters | `ccsim.simulation/1` (JSON) | `ccsim simulate --format json` | [section 11](TECHNICAL_DESIGN.md#11-output-schema-v1) |
-| Per-access decode, hit/miss, victim, fill, write-back, latency | `ccsim.events/1` (NDJSON, one event/line) | `ccsim simulate --emit-events` | [section 12.3](TECHNICAL_DESIGN.md#123-engine-event-stream) |
-| Monitoring time series (if a monitoring view is added later) | `ccsim.monitor/1` | `ccsim monitor` | [section 11](TECHNICAL_DESIGN.md#11-output-schema-v1) |
-
-This satisfies **AC‑9** (JSON carries `"schema"` v1 and loads in the viewer with no network). It is the mode the README viewer promises: static, offline, file-picker driven.
-
-### 7.2 Transport B — localhost API (optional, post-v1, open decision)
-
-The fully live experience in the images — configure, click Run, watch it step without touching a file — needs the app to invoke the backend directly. That means a thin **localhost HTTP + WebSocket server**, `ccsim serve`, which is an explicit **open decision (post-v1, not in v1)** in [TECHNICAL_DESIGN.md section 14](TECHNICAL_DESIGN.md#14-open-decisions) and requires Role 1 approval and a contract added through the [section 2 protocol](../CONTRIBUTING.md#2-shared-interfaces-and-ownership-boundaries). It is documented here so the frontend is designed to drop onto it without rework — same schemas, different transport.
-
-Proposed surface (loopback only, same-origin, no auth, no external access — consistent with "no cloud, no network at run time"):
-
-| Method & path | Request | Response | Backs |
-|---|---|---|---|
-| `GET /api/defaults` | — | default `HierarchyConfig` + field limits | View 1 form seeding |
-| `POST /api/simulate` | `{ config: HierarchyConfig, trace: {inline\|ref} }` | `ccsim.simulation/1` | Views 1, 3 |
-| `POST /api/events` | same as simulate | `ccsim.events/1` as NDJSON (stream) | View 2 load |
-| `GET  /ws/run?id=` | — (WebSocket) | events pushed per `seq` for live Play/Step | View 2 playback |
-| `POST /api/compare` | `{ trace, configs: HierarchyConfig[] }` | `ccsim.simulation/1[]` | View 4 |
-| `POST /api/trace/generate` | generator params (pattern, length, seed) | `.trace` text | View 1 workload |
-
-Contract rules: request `config` is exactly the validated `HierarchyConfig`; a `ConfigError`/`TraceError` returns HTTP 400 with the engine's `<source>:<line>: <message>` text (never a 500 for user input), mirroring CLI exit code 1 ([section 10](TECHNICAL_DESIGN.md#10-cli-contract)). Responses are byte-identical to the file outputs of transport A, so **nothing in views 1–4 changes** between the two transports — only the data source does. The WebSocket exists purely to stream an already-computed, deterministic event list in real time; it is not a second, live simulator.
-
-### 7.3 Why file-based is the v1 answer
-
-Transport A ships the whole frontend with zero new backend contract, zero network surface, and full offline/CI testability (the viewer loads sample files in CI, AC‑9). Transport B is the ergonomics upgrade and is deliberately deferred until Role 1 decides `ccsim serve` is in scope. Designing to the schemas rather than to HTTP is what lets us start on A and adopt B later without reworking the views.
+- **Transport:** a typed `postMessage` protocol between the UI thread and an engine Web Worker. Message types are defined in [ARCHITECTURE.md section 8.2](ARCHITECTURE.md#82-worker-protocol-ui--worker) and will live in `web/src/engine/protocol.ts`. UI code imports only that module; it never touches WASM memory.
+- **Payloads:** reports are `ccsim.simulation/1` JSON, comparisons are `ccsim.comparison/1` JSON or CSV, and live events are a transferred `Uint32Array` in the ABI layout of `include/ccsim/wasm/ccsim_api.h` (20 header words plus 5 per action). A decoder in `web/src/engine/events.ts` turns them into typed objects. A real sample report is [`tests/results/standard_dataset_default_run.json`](../tests/results/standard_dataset_default_run.json), so build against it.
+- **Sessions:** one worker per configuration, so a comparison of N configs runs on N cores in parallel.
+- **No server** is involved in simulation. A future share-link service would store only configs and reports (ARCHITECTURE.md section 4.5).
 
 ## 8. Application state and data flow
 
 ```mermaid
 flowchart LR
-    CFG["HierarchyConfig + trace<br/>(View 1)"] --> ENG["ccsim_core engine<br/>(file or localhost)"]
-    ENG --> RES["ccsim.simulation/1<br/>result document"]
-    ENG --> EVT["ccsim.events/1<br/>event list"]
-    RES --> AN["View 3 analytics"]
-    RES --> CMP["View 4 comparison (N results)"]
-    EVT --> VIZ["View 2 cursor + grid"]
+    CFG["Config form + trace file<br/>(View 1)"] -->|"trace.chunk × N, session.create"| W["Engine worker<br/>ccsim.wasm"]
+    W -->|"events (Uint32Array)"| VIZ["View 2 visualiser<br/>cursor + canvas grids"]
+    W -->|"report JSON"| AN["View 3 analytics"]
+    W -->|"compare JSON / CSV"| CMP["View 4 comparison"]
+    VIZ -->|"step / run / seek / reset"| W
 ```
 
-- A **run** = `{ config, traceRef, result, events? }`. The store keeps the active run for views 2–3 and a set of runs for view 4.
-- View 2 state is just the event list plus an integer **cursor**; all playback is cursor movement, and the grid is a pure function of events `[0..cursor]`. Reset sets the cursor to −1 (empty grid) and replays from 0.
-- No derived cache fact is stored that the engine did not emit; if a number isn't in the schema, the UI doesn't show it (or shows `n/a`).
+- A **run** = `{ config, traceFingerprint, sessionId, report? }`. The store (Zustand) keeps the active run for views 2 and 3 and a set of runs for view 4.
+- **The visualiser is driven, not replayed:** Play requests `session.step` batches once per animation frame, pipelined one batch ahead; Step requests 1; scrubbing sends `session.seek` and then redraws the grid from `session.grid`. Speed modes and the playback state machine are in [ARCHITECTURE.md section 7.4](ARCHITECTURE.md#74-playback-model).
+- No derived cache fact is stored unless the engine emitted it. If a number isn't in the schema, the UI doesn't show it (or shows `n/a`).
 
 ## 9. Technology and constraints
 
-- **Static, no build step required, no CDN, works offline** (README technology stack). All assets — scripts, styles, fonts, icons — are vendored under `web/`; nothing is fetched at run time.
-- **Charts** are inline SVG/HTML built per the `dataviz` skill (form → color → validate → marks → hover → a11y). No charting CDN. Run `scripts/validate_palette.js` on the palette before shipping; keep a table view behind every chart.
-- **Browsers**: current Chrome, Firefox, Edge, Safari, opened from a file picker with no network requests (Role 5 acceptance, [CONTRIBUTING.md Role 5](../CONTRIBUTING.md#role-5-frontend--visualization)).
-- **If a framework is later adopted** for the localhost experience, it must still emit a self-contained offline bundle with no CDN and no network calls; that is a joint Role 5 / Role 10 decision, not a default.
-- **Accessibility**: keyboard-operable playback, focus-visible controls, state conveyed by text/icon as well as color, and `prefers-reduced-motion` honored for the transient cell highlights.
+- **Stack:** React 18 + TypeScript + Vite; state in Zustand; charts in Apache ECharts (canvas rendering for large heatmaps and long series); set/way grids drawn on `<canvas>` (an L2 can have 32,768 cells). Testing: Vitest and Playwright.
+- **Deployment:** static build on Cloudflare Pages (GitHub Pages as fallback), with `.wasm` served as `application/wasm` and hashed immutable assets (ARCHITECTURE.md section 15).
+- **Charts** follow the `dataviz` method (form → colour → validate → marks → hover → accessibility): a legend whenever there are two or more series, a table view behind every chart, and no second y-axis.
+- **Browsers:** current Chrome, Firefox, Edge and Safari (all support WebAssembly, BigInt, Web Workers and `DecompressionStream`).
+- **Accessibility:** keyboard-operable playback, focus-visible controls, state conveyed by text or icon as well as colour, and `prefers-reduced-motion` honoured for transient highlights.
 
 ## 10. Acceptance criteria and ownership
 
 Owner: **Role 5** ([CONTRIBUTING.md](../CONTRIBUTING.md#role-5-frontend--visualization)). Depends on the schema v1 and sample files (Role 6, M1) and the event stream (Role 2, section 12). The frontend-specific criteria:
 
-1. **FE‑1** Every view renders from backend-produced files alone, offline, with no network request (extends **AC‑9**).
+1. **FE‑1** A full run (upload, simulate, analyse, compare) makes no network request after the site has loaded. All compute happens in the engine worker.
 2. **FE‑2** The cache visualizer's on-screen state equals the engine events at every step, and its final grid/counters equal the `ccsim.simulation/1` result for the golden traces — the UI runs no cache logic of its own (this is **AC‑11**, [WORKING_DEMO.md section 6](WORKING_DEMO.md#6-acceptance-criteria)).
 3. **FE‑3** Unavailable values render as `n/a`/`null` with the reason, never as `0`.
 4. **FE‑4** Every chart has a legend (≥ 2 series), a hover tooltip, and a data-table view; the palette passes the `dataviz` validator in light and dark modes.
 5. **FE‑5** Comparison export reproduces each run's exact `ccsim` invocation alongside the numbers.
 
-**Open decisions** (tracked in [TECHNICAL_DESIGN.md section 14](TECHNICAL_DESIGN.md#14-open-decisions)): whether the `ccsim.events/1` schema and the interactive debugger land in v1, and whether the localhost `ccsim serve` API (transport B) is in scope. Until those are decided, the file-based transport (A) is the committed path.
+**Decided (2026-10-29):** the interactive debugger is in v1, and the engine runs client-side as WebAssembly (ARCHITECTURE.md section 4). Remaining open items are in [ARCHITECTURE.md section 17](ARCHITECTURE.md#17-roadmap-and-open-decisions).
 
 ## 11. References
 
