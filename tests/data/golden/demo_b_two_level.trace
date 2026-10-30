@@ -1,0 +1,12 @@
+# Demo B (docs/WORKING_DEMO.md section 2): two-level walkthrough.
+# Write-back, non-inclusive L2, dirty evictions. Expected per-step table is in WORKING_DEMO.md.
+R 0x000
+W 0x008
+R 0x040
+R 0x080
+R 0x000
+W 0x0C0
+R 0x100
+R 0x010
+R 0x018
+R 0x0C4

@@ -1,0 +1,14 @@
+# Demo C (docs/WORKING_DEMO.md section 2): Belady reference string
+# 1,2,3,4,1,2,5,1,2,3,4,5 expressed as 16-byte lines. FIFO shows Belady's anomaly; LRU cannot.
+R 0x10
+R 0x20
+R 0x30
+R 0x40
+R 0x10
+R 0x20
+R 0x50
+R 0x10
+R 0x20
+R 0x30
+R 0x40
+R 0x50

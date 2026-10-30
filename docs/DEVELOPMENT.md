@@ -1,6 +1,8 @@
 # Development Guide
 
-Each command block is labelled **Verified** (executed, output matched) or **Not tested**. So far only the Linux paths have been executed; the README [platform matrix](../README.md#platform-validation-matrix) is the summary.
+Each command block is labelled **Verified** (executed, output matched) or **Not tested**. So far only the Linux paths have been executed; the README [platform matrix](../README.md#platform-validation-matrix) is the summary. Architecture and ownership: [ARCHITECTURE.md](ARCHITECTURE.md). Agent and contributor rules: [AGENTS.md](../AGENTS.md).
+
+Latest Linux verification (2026-10-29): Kali rolling, GCC 16.2 and Clang, CMake 4.4 + Ninja from pip; Release, Debug + ASan + UBSan, and Clang Release, all with `-DCCSIM_WARNINGS_AS_ERRORS=ON`.
 
 ## 1. Toolchains
 
@@ -17,8 +19,8 @@ CMake 3.20 is a hard minimum (`cmake_minimum_required`); it is also the first ve
 ### Linux
 
 ```bash
-# Debian / Ubuntu
-sudo apt update && sudo apt install -y build-essential cmake git
+# Debian / Ubuntu (zlib1g-dev lets the dataset suite read the gzip standard dataset)
+sudo apt update && sudo apt install -y build-essential cmake git zlib1g-dev
 # Fedora
 sudo dnf install -y gcc-c++ cmake make git
 # Arch
@@ -27,7 +29,7 @@ sudo pacman -S --needed base-devel cmake git
 sudo apt install -y clang ninja-build
 ```
 
-Check `cmake --version`. If your distribution ships CMake older than 3.20, install a current one with `python3 -m pip install --user cmake` and make sure `~/.local/bin` comes first on `PATH`.
+Check `cmake --version`. If your distribution ships CMake older than 3.20 (or none at all), install a current one with `python3 -m pip install --user cmake ninja`. Make sure `~/.local/bin` comes first on `PATH`; on distributions that block user installs, use a virtual environment: `python3 -m venv ~/.venvs/cmake && ~/.venvs/cmake/bin/pip install cmake ninja`. That last route is Verified.
 
 ### Windows
 
@@ -59,7 +61,7 @@ Full Xcode is needed only for the Instruments workflow in section 7.
 ```bash
 git clone <repository-url> cpu-cache-simulator
 cd cpu-cache-simulator
-git switch dev            # integration branch; see CONTRIBUTING.md section 6
+git switch dev 2>/dev/null || git switch main   # dev is the integration branch once created (CONTRIBUTING.md section 6)
 ```
 
 ## 4. Build and test
@@ -75,16 +77,20 @@ ctest --test-dir build --output-on-failure
 ./build/ccsim --version
 ```
 
-Expected test result:
+Expected test result (Ninja shown; Make prints the same):
 
 ```text
-    Start 1: smoke.cli_contract
-1/2 Test #1: smoke.cli_contract ...............   Passed    0.01 sec
-    Start 2: smoke.executable_version
-2/2 Test #2: smoke.executable_version .........   Passed    0.00 sec
+1/6 Test #1: smoke.cli_contract ...............   Passed    0.00 sec
+2/6 Test #2: smoke.executable_version .........   Passed    0.00 sec
+3/6 Test #3: unit.ccsim_unit_tests ............   Passed    0.61 sec
+4/6 Test #4: golden.ccsim_golden_tests ........   Passed    0.00 sec
+5/6 Test #5: stress.ccsim_stress_tests ........   Passed    2.94 sec
+6/6 Test #6: dataset.ccsim_dataset_tests ......   Passed    1.42 sec
 
-100% tests passed, 0 tests failed out of 2
+100% tests passed out of 6
 ```
+
+Without zlib headers the dataset suite shows as **skipped**, not passed.
 
 ### Linux (Clang): Verified
 
@@ -121,6 +127,19 @@ Visual Studio generators are multi-configuration: pick the configuration when bu
 | `CMAKE_BUILD_TYPE` | `Release` (single-configuration generators only) | `Debug`, `Release`, `RelWithDebInfo`, `MinSizeRel` |
 | `CCSIM_BUILD_TESTS` | `ON` | Build tests and register them with CTest |
 | `CCSIM_WARNINGS_AS_ERRORS` | `OFF` | Adds `-Werror` or `/WX`; CI turns it on |
+| `CCSIM_BUILD_BENCHMARKS` | `OFF` | Registers the `bench` suite (Release only); writes `tests/results/benchmark_report.md` |
+
+### WebAssembly (browser engine): Not tested
+
+Needs the [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html) (`./emsdk install 4.0.10 && ./emsdk activate 4.0.10 && source ./emsdk_env.sh`). 4.0.10 is the version CI pins.
+
+```bash
+emcmake cmake -S . -B build-wasm -DCMAKE_BUILD_TYPE=Release
+cmake --build build-wasm --target ccsim_wasm   # -> build-wasm/src/wasm/ccsim.mjs + ccsim.wasm
+node tests/wasm/smoke.mjs build-wasm/src/wasm/ccsim.mjs   # 0 pass, 1 fail, 77 session checks skipped
+```
+
+Tests are not built under Emscripten. The same C ABI (`src/wasm/ccsim_api.cpp`) is exercised natively by `unit.ccsim_unit_tests` (`wasm_api.*`). Until the configuration track's `src/policy/` exists, the browser module loads but refuses to create sessions, with the message "no replacement policies are linked"; `tests/wasm/smoke.mjs` then checks the ABI and trace upload and exits 77 (session checks skipped). CI (`.github/workflows/ci.yml`) runs this on every push, next to GCC, Clang and ASan + UBSan native jobs.
 
 Add `--parallel <jobs>` to `cmake --build` for faster builds and `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` (Make and Ninja generators) for clangd.
 
@@ -133,7 +152,7 @@ ctest --test-dir build -R cli_contract -V       # by name pattern, verbose
 ctest --test-dir build -LE hardware             # skip tests that need real counters (label planned)
 ```
 
-On Windows and other multi-configuration generators, add `-C Release` (or the configuration you built). Current label: `smoke`. Planned labels: `unit`, `e2e`, `hardware`, `bench` ([CONTRIBUTING.md section 8](../CONTRIBUTING.md#8-testing-standards)).
+On Windows and other multi-configuration generators, add `-C Release` (or the configuration you built). Labels: `smoke` (CLI contract), `unit` (module tests), `golden` (WORKING_DEMO Demos A–C), `stress` (invariants over a 72-configuration matrix at 1M accesses), `dataset` (standard dataset integrity, regression baselines, fitness report), and `bench` (opt-in, Release only). Filter inside a suite by test-name substring: `./build/tests/ccsim_unit_tests session.`. The layout is in [ARCHITECTURE.md section 14](ARCHITECTURE.md#14-testing-and-quality).
 
 ## 6. Debugging
 
@@ -160,6 +179,8 @@ ctest --test-dir build-asan --output-on-failure
 An MSVC AddressSanitizer option is planned (issue M2-15).
 
 ## 7. Monitoring prerequisites
+
+> **Deferred** (2026-10-29): the project is focusing on the simulation website. These notes are kept for later.
 
 `ccsim monitor` is not implemented yet. These checks show what a machine exposes so Roles 4 and 7 can plan and record evidence. None has been run on real hardware: the validation VM has no PMU.
 
@@ -195,7 +216,7 @@ sudo powermetrics --samplers cpu_power -i 1000 -n 1   # power and frequency only
 xcrun xctrace list templates                          # needs full Xcode; look for "CPU Counters"
 ```
 
-Recording cache events requires a preconfigured template; see [WORKING_DEMO.md section 3](WORKING_DEMO.md#3-monitoring-workflow-planned).
+Recording cache events requires a preconfigured template; see [WORKING_DEMO.md section 3](WORKING_DEMO.md#3-monitoring-workflow-deferred).
 
 ## 8. Troubleshooting
 
@@ -212,3 +233,6 @@ Recording cache events requires a preconfigured template; see [WORKING_DEMO.md s
 | `perf` permission errors | `perf_event_paranoid` too strict | Section 7: lower it temporarily or grant `CAP_PERFMON` |
 | Hardware events show `<not supported>` | VM or container without a virtualized PMU, or event absent on this CPU | Use bare metal or a VM with PMU passthrough; `ccsim` reports such metrics as `unsupported` |
 | A test fails in Debug but passes in Release | The check uses `assert()`, which `NDEBUG` removes in Release | Use the test framework's checks (CONTRIBUTING.md section 8) |
+| `dataset.ccsim_dataset_tests` reports *skipped* | zlib headers were missing at configure time | Install `zlib1g-dev` (or your distribution's zlib development package) and reconfigure |
+| `dataset.regression_baseline` fails after an engine change | Engine behaviour changed on the standard dataset | Expected only if the change was intended: explain it in the PR, then update the pinned numbers and `tests/data/standard/README.md` |
+| `cmake` not found and `pip install --user` refused ("externally managed environment") | PEP 668 distributions | Use a venv (section 2) |

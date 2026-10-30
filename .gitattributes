@@ -1,0 +1,6 @@
+# Normalise line endings so Windows and Unix contributors never conflict on whole files.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.gz binary
+*.png binary
+*.wasm binary

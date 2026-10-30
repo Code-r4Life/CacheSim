@@ -1,0 +1,9 @@
+# Demo A (docs/WORKING_DEMO.md section 2): conflict misses and associativity.
+# Lines 0 and 4 map to the same set of a 64-byte direct-mapped cache.
+# Expected results were derived by hand in WORKING_DEMO.md, not from the implementation.
+R 0x000
+R 0x040
+R 0x000
+R 0x040
+R 0x000
+R 0x040

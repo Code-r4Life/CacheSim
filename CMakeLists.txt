@@ -33,30 +33,41 @@ function(ccsim_set_warnings target)
   endif()
 endfunction()
 
-# Portable core. Platform-specific monitoring backends will be added as separate
-# sources selected by CMAKE_SYSTEM_NAME (see docs/TECHNICAL_DESIGN.md).
+# Portable core. Each module directory src/<module>/ owns a CMakeLists.txt that appends
+# its sources to ccsim_core with target_sources(). Modules are discovered automatically, so
+# adding a module never edits this file (merge-conflict rule, docs/ARCHITECTURE.md 12).
+# src/wasm/ is excluded: it is a separate target layered on top of the core.
 add_library(ccsim_core STATIC src/cli.cpp)
 target_include_directories(ccsim_core PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_compile_definitions(ccsim_core PRIVATE CCSIM_VERSION="${PROJECT_VERSION}")
 ccsim_set_warnings(ccsim_core)
 
+file(GLOB CCSIM_MODULE_LISTS CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/src/*/CMakeLists.txt")
+list(SORT CCSIM_MODULE_LISTS)
+foreach(module_list IN LISTS CCSIM_MODULE_LISTS)
+  get_filename_component(module_dir "${module_list}" DIRECTORY)
+  get_filename_component(module_name "${module_dir}" NAME)
+  if(NOT module_name STREQUAL "wasm")
+    add_subdirectory("${module_dir}")
+  endif()
+endforeach()
+
+# True once the policy owner's src/policy/ defines make_policy(); tests then also run the
+# golden suite against the production policies, not only the test stand-ins.
+if(EXISTS "${PROJECT_SOURCE_DIR}/src/policy/CMakeLists.txt")
+  set(CCSIM_HAS_PRODUCTION_POLICIES ON)
+else()
+  set(CCSIM_HAS_PRODUCTION_POLICIES OFF)
+endif()
+
+# C ABI used by the browser build (src/wasm/). Built natively too so tests can call it.
+add_subdirectory(src/wasm)
+
 add_executable(ccsim src/main.cpp)
 target_link_libraries(ccsim PRIVATE ccsim_core)
 ccsim_set_warnings(ccsim)
 
-if(CCSIM_BUILD_TESTS)
+if(CCSIM_BUILD_TESTS AND NOT EMSCRIPTEN)
   enable_testing()
-
-  add_executable(ccsim_smoke_test tests/smoke_test.cpp)
-  target_link_libraries(ccsim_smoke_test PRIVATE ccsim_core)
-  target_compile_definitions(ccsim_smoke_test PRIVATE CCSIM_EXPECTED_VERSION="${PROJECT_VERSION}")
-  ccsim_set_warnings(ccsim_smoke_test)
-
-  # In-process checks of the CLI contract (exit codes, output streams).
-  add_test(NAME smoke.cli_contract COMMAND ccsim_smoke_test)
-  # The real executable starts and reports the configured version.
-  add_test(NAME smoke.executable_version COMMAND ccsim --version)
-  set_tests_properties(smoke.executable_version PROPERTIES
-    PASS_REGULAR_EXPRESSION "^ccsim ${PROJECT_VERSION}")
-  set_tests_properties(smoke.cli_contract smoke.executable_version PROPERTIES LABELS smoke)
+  add_subdirectory(tests)
 endif()
