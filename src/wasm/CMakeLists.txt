@@ -7,6 +7,11 @@ ccsim_set_warnings(ccsim_api)
 # Browser module: only with the Emscripten toolchain (emcmake cmake ...). "node" is in
 # ENVIRONMENT so CI can load the same artefact in tests/wasm/smoke.mjs. Not tested locally.
 if(EMSCRIPTEN)
+  # Emscripten disables C++ exception catching by default, so a throw (bad trace line,
+  # invalid config) would abort the module instead of reaching the ABI's catch and
+  # last_error. Native wasm exceptions: every TU of the core and the link must agree.
+  target_compile_options(ccsim_core PUBLIC -fwasm-exceptions)
+  target_link_options(ccsim_core PUBLIC -fwasm-exceptions)
   add_executable(ccsim_wasm wasm_main.cpp)
   target_link_libraries(ccsim_wasm PRIVATE ccsim_api)
   if(CCSIM_HAS_PRODUCTION_POLICIES)
